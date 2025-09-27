@@ -1,0 +1,20 @@
+{
+  "name": "priceshooters",
+  "version": "1.0.0",
+  "description": "A 2D pixel-art inspired, neon/cyberpunk top-down survival shooter. You start with $1. Each enemy kill earns +$1. Survive as long as possible.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node server/index.js",
+    "start": "node server/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2"
+  }
+}
