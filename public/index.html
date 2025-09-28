@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PriceShooters - Skill Gamble Arena</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="hud">
+      <div class="logo">PriceShooters</div>
+      <div class="pot">
+        <span class="label">Arena Pot</span>
+        <span id="pot-value" class="value">$0</span>
+      </div>
+      <div class="wallet">
+        <span class="label">Your Wallet</span>
+        <span id="wallet-value" class="value">$10</span>
+      </div>
+      <button id="insert-button" class="insert">Insert $1 &amp; Spawn</button>
+    </div>
+
+    <canvas id="game-canvas" width="960" height="540"></canvas>
+
+    <div class="overlay" id="overlay">
+      <div class="card">
+        <h1>Skill Gamble Arena</h1>
+        <p>
+          Drop $1 to spawn and battle rival mercenaries for the cash pot. Survive the
+          arena and cash out your winnings. For this prototype, you're matched against
+          static bots &mdash; land your shots to win!
+        </p>
+        <ul>
+          <li>Move with <strong>WASD</strong>, <strong>arrow keys</strong>, or hold <strong>right mouse</strong> to stride.</li>
+          <li>Aim with your mouse cursor.</li>
+          <li>Left click to fire neon pulses.</li>
+        </ul>
+        <p class="hint">Press the button above to insert $1 and enter the arena.</p>
+      </div>
+    </div>
+
+    <script src="game.js" type="module"></script>
+  </body>
+</html>
