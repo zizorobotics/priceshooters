@@ -114,11 +114,16 @@ canvas {
   justify-content: center;
   backdrop-filter: blur(2px);
   transition: opacity 0.3s ease;
+  pointer-events: none;
 }
 
 .overlay.hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+.overlay .card {
+  pointer-events: auto;
 }
 
 .card {
