@@ -11,8 +11,12 @@ const overlayHint = overlay.querySelector('.hint');
 const ENTRY_COST = 1;
 const BOT_COUNT = 3;
 const BOT_CONTRIBUTION = ENTRY_COST;
+const BOT_SHOOT_INTERVAL = 5000;
+const BOT_BULLET_DAMAGE = 20;
+const CASH_OUT_HOLD_DURATION = 3000;
+const CASH_OUT_COOLDOWN = 2000;
 const INTRO_MESSAGE =
-  "Drop $1 to spawn and battle rival mercenaries for the arena pot. Static bots keep the field busy for this prototype—land your neon shots to win!";
+  "Drop $1 to spawn and battle rival mercenaries for the arena pot. Automated turrets keep the field busy for this prototype—land your neon shots, dodge return fire, and escape with the cash!";
 
 const state = {
   wallet: 10,
@@ -24,6 +28,8 @@ const state = {
   mouse: { x: canvas.width / 2, y: canvas.height / 2 },
   keys: new Set(),
 };
+
+let currentTimestamp = 0;
 
 const player = {
   x: canvas.width / 2,
@@ -37,7 +43,14 @@ const player = {
 
 const bots = [];
 const bullets = [];
+const botBullets = [];
 const particles = [];
+
+const cashOutState = {
+  holding: false,
+  holdStart: 0,
+  cooldownUntil: 0,
+};
 
 class Bot {
   constructor(x, y, tint) {
@@ -48,6 +61,7 @@ class Bot {
     this.health = 60;
     this.maxHealth = 60;
     this.tint = tint;
+    this.lastShot = performance.now();
   }
 
   draw() {
@@ -79,6 +93,34 @@ class Bullet {
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(this.x - this.vx * 2, this.y - this.vy * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+class BotBullet {
+  constructor(x, y, angle) {
+    const speed = 4.5;
+    this.x = x;
+    this.y = y;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.life = 160;
+  }
+
+  update(delta = 1) {
+    this.x += this.vx * delta;
+    this.y += this.vy * delta;
+    this.life -= delta;
+  }
+
+  draw() {
+    ctx.save();
+    ctx.strokeStyle = '#ffb347';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x - this.vx * 3, this.y - this.vy * 3);
     ctx.stroke();
     ctx.restore();
   }
@@ -135,7 +177,11 @@ function resetGame() {
   player.y = canvas.height - 120;
   player.health = player.maxHealth;
   bullets.length = 0;
+  botBullets.length = 0;
   particles.length = 0;
+  cashOutState.holding = false;
+  cashOutState.holdStart = 0;
+  cashOutState.cooldownUntil = performance.now();
   spawnBots();
 }
 
@@ -150,6 +196,9 @@ function insertAndSpawn() {
   shooting = false;
   mouseDrive = false;
   state.lastShot = 0;
+  cashOutState.holding = false;
+  cashOutState.holdStart = 0;
+  cashOutState.cooldownUntil = performance.now();
   resetGame();
 }
 
@@ -205,6 +254,87 @@ function shoot() {
   for (let i = 0; i < 4; i += 1) {
     particles.push(new Particle(muzzleX, muzzleY, '#ff3cac'));
   }
+}
+
+function completeCashOut() {
+  state.active = false;
+  state.gameOver = true;
+  shooting = false;
+  mouseDrive = false;
+  const winnings = state.pot;
+  state.wallet += winnings;
+  state.pot = 0;
+  updateHUD();
+  cashOutState.holding = false;
+  botBullets.length = 0;
+  showOverlay('Cash Out Complete', `You extracted $${winnings.toFixed(2)} from the arena.`);
+}
+
+function interruptCashOut(now) {
+  if (cashOutState.holding) {
+    cashOutState.holding = false;
+    cashOutState.holdStart = 0;
+  }
+  cashOutState.cooldownUntil = Math.max(cashOutState.cooldownUntil, now + CASH_OUT_COOLDOWN);
+}
+
+function updateCashOut(timestamp) {
+  if (!state.active) {
+    cashOutState.holding = false;
+    return;
+  }
+
+  const now = timestamp;
+  if (cashOutState.holding) {
+    if (!state.keys.has('g')) {
+      cashOutState.holding = false;
+      cashOutState.holdStart = 0;
+    } else if (now - cashOutState.holdStart >= CASH_OUT_HOLD_DURATION) {
+      completeCashOut();
+    }
+    return;
+  }
+
+  if (!state.keys.has('g')) return;
+  if (now < cashOutState.cooldownUntil) return;
+
+  cashOutState.holding = true;
+  cashOutState.holdStart = now;
+}
+
+function handlePlayerDefeat() {
+  state.active = false;
+  state.gameOver = true;
+  shooting = false;
+  mouseDrive = false;
+  const loss = state.pot;
+  state.pot = 0;
+  updateHUD();
+  botBullets.length = 0;
+  showOverlay('Defeat', loss > 0 ? `You were eliminated and lost the $${loss.toFixed(2)} pot.` : 'You were eliminated.');
+}
+
+function handlePlayerHit(damage, timestamp) {
+  if (!state.active) return;
+  player.health = Math.max(player.health - damage, 0);
+  interruptCashOut(timestamp);
+  for (let i = 0; i < 6; i += 1) {
+    particles.push(new Particle(player.x, player.y, '#ff3cac'));
+  }
+  if (player.health <= 0) {
+    handlePlayerDefeat();
+  }
+}
+
+function handleBotShooting(timestamp) {
+  bots.forEach((bot) => {
+    if (timestamp - bot.lastShot < BOT_SHOOT_INTERVAL) return;
+    bot.lastShot = timestamp;
+    const centerX = bot.x + bot.width / 2;
+    const centerY = bot.y + bot.height / 2;
+    const angle = Math.atan2(player.y - centerY, player.x - centerX);
+    botBullets.push(new BotBullet(centerX, centerY, angle));
+  });
 }
 
 function handleMovement(delta) {
@@ -264,6 +394,29 @@ function updateBullets(delta) {
         }
         break;
       }
+    }
+  }
+}
+
+function updateBotBullets(delta, timestamp) {
+  for (let i = botBullets.length - 1; i >= 0; i -= 1) {
+    const bullet = botBullets[i];
+    bullet.update(delta);
+    if (
+      bullet.life <= 0 ||
+      bullet.x < -20 ||
+      bullet.x > canvas.width + 20 ||
+      bullet.y < -20 ||
+      bullet.y > canvas.height + 20
+    ) {
+      botBullets.splice(i, 1);
+      continue;
+    }
+
+    const distance = Math.hypot(bullet.x - player.x, bullet.y - player.y);
+    if (distance <= player.radius) {
+      botBullets.splice(i, 1);
+      handlePlayerHit(BOT_BULLET_DAMAGE, timestamp);
     }
   }
 }
@@ -378,6 +531,45 @@ function drawUI() {
   ctx.font = '12px "Press Start 2P"';
   ctx.fillText(`POT: $${state.pot.toFixed(2)}`, 150, canvas.height - 36);
   ctx.fillText(`HP: ${Math.max(player.health, 0)}`, 150, canvas.height - 20);
+
+  if (state.active) {
+    ctx.fillStyle = '#f5ff5c';
+    ctx.font = '10px "Press Start 2P"';
+    ctx.fillText('CASH OUT [G]', 40, canvas.height - 4);
+
+    const cooldownRemaining = Math.max(0, cashOutState.cooldownUntil - currentTimestamp);
+    const barX = 150;
+    const barY = canvas.height - 14;
+    const barWidth = 104;
+    const barHeight = 6;
+    ctx.fillStyle = 'rgba(12, 6, 23, 0.7)';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+
+    let progress = 0;
+    if (cashOutState.holding) {
+      progress = Math.min((currentTimestamp - cashOutState.holdStart) / CASH_OUT_HOLD_DURATION, 1);
+      ctx.fillStyle = '#3cfbff';
+      ctx.fillRect(barX, barY, barWidth * progress, barHeight);
+      ctx.fillStyle = '#ff3cac';
+      ctx.font = '8px "Press Start 2P"';
+      ctx.fillText('HOLDING...', barX, barY - 2);
+    } else if (cooldownRemaining > 0) {
+      progress = Math.min(cooldownRemaining / CASH_OUT_COOLDOWN, 1);
+      ctx.fillStyle = '#ff3cac';
+      ctx.fillRect(barX, barY, barWidth * progress, barHeight);
+      ctx.fillStyle = '#ff3cac';
+      ctx.font = '8px "Press Start 2P"';
+      ctx.fillText('HIT! RECOVERING', barX, barY - 2);
+    } else {
+      ctx.fillStyle = '#3cfbff';
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+      ctx.font = '8px "Press Start 2P"';
+      ctx.fillText('READY', barX, barY - 2);
+    }
+
+    ctx.strokeStyle = 'rgba(60, 251, 255, 0.8)';
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+  }
   ctx.restore();
 }
 
@@ -406,14 +598,17 @@ function showOverlay(title, message, { showList = false } = {}) {
     : 'Hit the insert button to rejoin the arena.';
 }
 
-function update(delta) {
+function update(delta, timestamp) {
+  updateCashOut(timestamp);
   if (!state.active) return;
   handleMovement(delta);
   handleMouseStride(delta);
   if (shooting) {
     shoot();
   }
+  handleBotShooting(timestamp);
   updateBullets(delta);
+  updateBotBullets(delta, timestamp);
   updateParticles(delta);
   checkWinState();
 }
@@ -424,6 +619,7 @@ function draw() {
   drawPlayer();
   drawParticles();
   bullets.forEach((bullet) => bullet.draw());
+  botBullets.forEach((bullet) => bullet.draw());
   drawUI();
 }
 
@@ -431,7 +627,8 @@ let lastTimestamp = 0;
 function loop(timestamp) {
   const delta = (timestamp - lastTimestamp) / (1000 / 60);
   lastTimestamp = timestamp;
-  update(delta);
+  currentTimestamp = timestamp;
+  update(delta, timestamp);
   draw();
   requestAnimationFrame(loop);
 }
