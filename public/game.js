@@ -29,6 +29,7 @@ const state = {
   keys: new Set(),
 };
 
+codex/adjust-.overlay-rule-for-click-interactions-khqxfo
 const world = {
   width: 2400,
   height: 1600,
@@ -44,6 +45,7 @@ const camera = {
 const BARRIER_DAMAGE_PER_SECOND = 25;
 let barrierDamageBuffer = 0;
 
+main
 let currentTimestamp = 0;
 
 const player = {
@@ -67,6 +69,7 @@ const cashOutState = {
   cooldownUntil: 0,
 };
 
+codex/adjust-.overlay-rule-for-click-interactions-khqxfo
 function getMouseWorldPosition() {
   return {
     x: camera.x + state.mouse.x,
@@ -78,6 +81,8 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+
+main
 class Bot {
   constructor(x, y, tint) {
     this.x = x;
@@ -208,9 +213,12 @@ function resetGame() {
   cashOutState.holding = false;
   cashOutState.holdStart = 0;
   cashOutState.cooldownUntil = performance.now();
+  codex/adjust-.overlay-rule-for-click-interactions-khqxfo
   barrierDamageBuffer = 0;
   camera.x = clamp(player.x - canvas.width / 2, 0, Math.max(world.width - canvas.width, 0));
   camera.y = clamp(player.y - canvas.height / 2, 0, Math.max(world.height - canvas.height, 0));
+
+main
   spawnBots();
 }
 
@@ -297,7 +305,10 @@ function completeCashOut() {
   updateHUD();
   cashOutState.holding = false;
   botBullets.length = 0;
+  codex/adjust-.overlay-rule-for-click-interactions-khqxfo
   barrierDamageBuffer = 0;
+
+main
   showOverlay('Cash Out Complete', `You extracted $${winnings.toFixed(2)} from the arena.`);
 }
 
@@ -342,7 +353,10 @@ function handlePlayerDefeat() {
   state.pot = 0;
   updateHUD();
   botBullets.length = 0;
+  codex/adjust-.overlay-rule-for-click-interactions-khqxfo
   barrierDamageBuffer = 0;
+
+main
   showOverlay('Defeat', loss > 0 ? `You were eliminated and lost the $${loss.toFixed(2)} pot.` : 'You were eliminated.');
 }
 
@@ -369,6 +383,7 @@ function handleBotShooting(timestamp) {
   });
 }
 
+codex/adjust-.overlay-rule-for-click-interactions-khqxfo
 function applyPlayerConstraints(candidateX, candidateY, delta, timestamp) {
   const innerLeft = world.barrierThickness + player.radius;
   const innerRight = world.width - world.barrierThickness - player.radius;
@@ -402,6 +417,9 @@ function applyBarrierDamage(delta, timestamp) {
 }
 
 function handleMovement(delta, timestamp) {
+
+function handleMovement(delta) {
+main
   const { keys } = state;
   let vx = 0;
   let vy = 0;
@@ -480,9 +498,15 @@ function updateBotBullets(delta, timestamp) {
     if (
       bullet.life <= 0 ||
       bullet.x < -20 ||
+codex/adjust-.overlay-rule-for-click-interactions-khqxfo
       bullet.x > world.width + 20 ||
       bullet.y < -20 ||
       bullet.y > world.height + 20
+
+      bullet.x > canvas.width + 20 ||
+      bullet.y < -20 ||
+      bullet.y > canvas.height + 20
+main
     ) {
       botBullets.splice(i, 1);
       continue;
@@ -684,6 +708,7 @@ function drawUI() {
     ctx.strokeStyle = 'rgba(60, 251, 255, 0.8)';
     ctx.strokeRect(barX, barY, barWidth, barHeight);
   }
+codex/adjust-.overlay-rule-for-click-interactions-khqxfo
   drawMiniMap();
   ctx.restore();
 }
@@ -746,6 +771,8 @@ function drawMiniMap() {
   ctx.lineWidth = 1;
   ctx.strokeRect(viewportX, viewportY, viewportWidth, viewportHeight);
 
+
+main
   ctx.restore();
 }
 
@@ -776,6 +803,7 @@ function showOverlay(title, message, { showList = false } = {}) {
 
 function update(delta, timestamp) {
   updateCashOut(timestamp);
+codex/adjust-.overlay-rule-for-click-interactions-khqxfo
   if (state.active) {
     handleMovement(delta, timestamp);
     handleMouseStride(delta, timestamp);
@@ -791,6 +819,19 @@ function update(delta, timestamp) {
     updateParticles(delta);
   }
   updateCamera(delta);
+
+  if (!state.active) return;
+  handleMovement(delta);
+  handleMouseStride(delta);
+  if (shooting) {
+    shoot();
+  }
+  handleBotShooting(timestamp);
+  updateBullets(delta);
+  updateBotBullets(delta, timestamp);
+  updateParticles(delta);
+  checkWinState();
+main
 }
 
 function draw() {
@@ -803,7 +844,10 @@ function draw() {
   drawParticles();
   bullets.forEach((bullet) => bullet.draw());
   botBullets.forEach((bullet) => bullet.draw());
+  codex/adjust-.overlay-rule-for-click-interactions-khqxfo
   ctx.restore();
+
+main
   drawUI();
 }
 
