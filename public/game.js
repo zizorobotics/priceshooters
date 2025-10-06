@@ -50,16 +50,32 @@ const player = {
   x: world.width / 2,
   y: world.height - world.barrierThickness - 200,
   radius: 18,
-  speed: 2.8,
+  maxSpeed: 5.1,
+  acceleration: 0.36,
+  damping: 0.86,
+  vx: 0,
+  vy: 0,
+  thrusterWarmth: 0,
   health: 100,
   maxHealth: 100,
   color: '#3cfbff',
+  sprite: null,
 };
 
 const bots = [];
 const bullets = [];
 const botBullets = [];
 const particles = [];
+
+const spriteSupportAvailable = typeof window !== 'undefined' && typeof Mask !== 'undefined' && typeof Sprite !== 'undefined';
+
+const spriteAssets = spriteSupportAvailable ? buildSpriteAssets() : null;
+const spaceBackdrop = spriteAssets ? spriteAssets.background : null;
+
+if (spriteAssets?.player) {
+  player.sprite = spriteAssets.player;
+  player.radius = spriteAssets.player.hitRadius;
+}
 
 const cashOutState = {
   holding: false,
@@ -79,11 +95,13 @@ function clamp(value, min, max) {
 }
 
 class Bot {
-  constructor(x, y, tint) {
+  constructor(x, y, tint, spriteAsset) {
     this.x = x;
     this.y = y;
-    this.width = 44;
-    this.height = 44;
+    this.sprite = spriteAsset || null;
+    this.width = this.sprite?.width ?? 44;
+    this.height = this.sprite?.height ?? 44;
+    this.hitRadius = this.sprite?.hitRadius ?? Math.max(this.width, this.height) / 2;
     this.health = 60;
     this.maxHealth = 60;
     this.tint = tint;
@@ -91,8 +109,13 @@ class Bot {
   }
 
   draw() {
-    drawBotSprite(this.x, this.y, this.tint);
-    drawHealthBar(this.x + this.width / 2, this.y - 12, this.health, this.maxHealth);
+    const aimAngle = Math.atan2(player.y - this.y, player.x - this.x);
+    if (this.sprite) {
+      drawShipSprite(this.sprite, this.x, this.y, aimAngle, { glowColor: this.tint, thrusterIntensity: 0.35 });
+    } else {
+      drawFallbackBotSprite(this, aimAngle);
+    }
+    drawHealthBar(this.x, this.y - (this.hitRadius + 18), this.health, this.maxHealth);
   }
 }
 
@@ -188,19 +211,24 @@ function spawnBots() {
   bots.length = 0;
   const colors = ['#ff3cac', '#ffb74d', '#9575cd'];
   const positions = [
-    { x: world.width * 0.28, y: world.barrierThickness + 260 },
-    { x: world.width * 0.5 - 22, y: world.height * 0.36 },
-    { x: world.width * 0.72, y: world.barrierThickness + 520 },
+    { x: world.width * 0.28, y: world.barrierThickness + 320 },
+    { x: world.width * 0.5, y: world.height * 0.36 + 40 },
+    { x: world.width * 0.72, y: world.barrierThickness + 560 },
   ];
   for (let i = 0; i < BOT_COUNT; i += 1) {
     const spot = positions[i % positions.length];
-    bots.push(new Bot(spot.x, spot.y, colors[i % colors.length]));
+    const tint = colors[i % colors.length];
+    const sprite = spriteAssets?.botFactory ? spriteAssets.botFactory(tint) : null;
+    bots.push(new Bot(spot.x, spot.y, tint, sprite));
   }
 }
 
 function resetGame() {
   player.x = world.width / 2;
   player.y = world.height - world.barrierThickness - 200;
+  player.vx = 0;
+  player.vy = 0;
+  player.thrusterWarmth = 0;
   player.health = player.maxHealth;
   bullets.length = 0;
   botBullets.length = 0;
@@ -241,16 +269,22 @@ document.addEventListener('keyup', (event) => {
   state.keys.delete(event.key.toLowerCase());
 });
 
-canvas.addEventListener('mousemove', (event) => {
+function updatePointerPosition(event) {
   const rect = canvas.getBoundingClientRect();
   state.mouse.x = ((event.clientX - rect.left) / rect.width) * canvas.width;
   state.mouse.y = ((event.clientY - rect.top) / rect.height) * canvas.height;
-});
+}
 
 let shooting = false;
 let mouseDrive = false;
 
-canvas.addEventListener('mousedown', (event) => {
+canvas.addEventListener('pointermove', (event) => {
+  updatePointerPosition(event);
+});
+
+canvas.addEventListener('pointerdown', (event) => {
+  updatePointerPosition(event);
+  canvas.setPointerCapture(event.pointerId);
   if (event.button === 0) {
     shooting = true;
     shoot();
@@ -259,16 +293,30 @@ canvas.addEventListener('mousedown', (event) => {
   }
 });
 
-document.addEventListener('mouseup', (event) => {
+canvas.addEventListener('pointerup', (event) => {
   if (event.button === 0) {
     shooting = false;
   } else if (event.button === 2) {
     mouseDrive = false;
   }
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+});
+
+canvas.addEventListener('pointercancel', () => {
+  shooting = false;
+  mouseDrive = false;
 });
 
 canvas.addEventListener('contextmenu', (event) => {
   event.preventDefault();
+});
+
+window.addEventListener('blur', () => {
+  shooting = false;
+  mouseDrive = false;
+  state.keys.clear();
 });
 
 function shoot() {
@@ -278,8 +326,9 @@ function shoot() {
   state.lastShot = now;
   const mouseWorld = getMouseWorldPosition();
   const angle = Math.atan2(mouseWorld.y - player.y, mouseWorld.x - player.x);
-  const muzzleX = player.x + Math.cos(angle) * (player.radius + 6);
-  const muzzleY = player.y + Math.sin(angle) * (player.radius + 6);
+  const muzzleDistance = player.sprite?.muzzleLength ?? player.radius + 6;
+  const muzzleX = player.x + Math.cos(angle) * muzzleDistance;
+  const muzzleY = player.y + Math.sin(angle) * muzzleDistance;
   bullets.push(new Bullet(muzzleX, muzzleY, angle));
   for (let i = 0; i < 4; i += 1) {
     particles.push(new Particle(muzzleX, muzzleY, '#ff3cac'));
@@ -362,8 +411,8 @@ function handleBotShooting(timestamp) {
   bots.forEach((bot) => {
     if (timestamp - bot.lastShot < BOT_SHOOT_INTERVAL) return;
     bot.lastShot = timestamp;
-    const centerX = bot.x + bot.width / 2;
-    const centerY = bot.y + bot.height / 2;
+    const centerX = bot.x;
+    const centerY = bot.y;
     const angle = Math.atan2(player.y - centerY, player.x - centerX);
     botBullets.push(new BotBullet(centerX, centerY, angle));
   });
@@ -403,36 +452,61 @@ function applyBarrierDamage(delta, timestamp) {
 
 function handleMovement(delta, timestamp) {
   const { keys } = state;
-  let vx = 0;
-  let vy = 0;
-  if (keys.has('w') || keys.has('arrowup')) vy -= 1;
-  if (keys.has('s') || keys.has('arrowdown')) vy += 1;
-  if (keys.has('a') || keys.has('arrowleft')) vx -= 1;
-  if (keys.has('d') || keys.has('arrowright')) vx += 1;
+  let inputX = 0;
+  let inputY = 0;
 
-  if (vx === 0 && vy === 0) return;
+  if (keys.has('w') || keys.has('arrowup')) inputY -= 1;
+  if (keys.has('s') || keys.has('arrowdown')) inputY += 1;
+  if (keys.has('a') || keys.has('arrowleft')) inputX -= 1;
+  if (keys.has('d') || keys.has('arrowright')) inputX += 1;
 
-  const length = Math.hypot(vx, vy);
-  vx = (vx / length) * player.speed * delta;
-  vy = (vy / length) * player.speed * delta;
-  const candidateX = player.x + vx;
-  const candidateY = player.y + vy;
-  applyPlayerConstraints(candidateX, candidateY, delta, timestamp);
-}
+  if (mouseDrive) {
+    const mouseWorld = getMouseWorldPosition();
+    const dx = mouseWorld.x - player.x;
+    const dy = mouseWorld.y - player.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > 8) {
+      inputX += dx / distance;
+      inputY += dy / distance;
+    }
+  }
 
-function handleMouseStride(delta, timestamp) {
-  if (!mouseDrive) return;
-  const mouseWorld = getMouseWorldPosition();
-  const dx = mouseWorld.x - player.x;
-  const dy = mouseWorld.y - player.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance < 1) return;
-  const step = Math.min(player.speed * delta, distance);
-  const nx = dx / distance;
-  const ny = dy / distance;
-  const candidateX = player.x + nx * step;
-  const candidateY = player.y + ny * step;
-  applyPlayerConstraints(candidateX, candidateY, delta, timestamp);
+  const damping = Math.pow(player.damping, Math.max(delta, 0));
+  player.vx *= damping;
+  player.vy *= damping;
+
+  const inputMagnitude = Math.hypot(inputX, inputY);
+  if (inputMagnitude > 0) {
+    const nx = inputX / inputMagnitude;
+    const ny = inputY / inputMagnitude;
+    player.vx += nx * player.acceleration * delta;
+    player.vy += ny * player.acceleration * delta;
+  }
+
+  const speed = Math.hypot(player.vx, player.vy);
+  if (speed > player.maxSpeed) {
+    const scale = player.maxSpeed / speed;
+    player.vx *= scale;
+    player.vy *= scale;
+  }
+
+  if (player.sprite) {
+    const targetWarmth = speed > 0.4 ? 1 : 0;
+    player.thrusterWarmth += (targetWarmth - player.thrusterWarmth) * Math.min(delta * 0.15, 1);
+  }
+
+  if (speed < 0.01) {
+    player.vx = 0;
+    player.vy = 0;
+  }
+
+  if (player.vx !== 0 || player.vy !== 0) {
+    const candidateX = player.x + player.vx * delta;
+    const candidateY = player.y + player.vy * delta;
+    applyPlayerConstraints(candidateX, candidateY, delta, timestamp);
+  } else {
+    applyPlayerConstraints(player.x, player.y, delta, timestamp);
+  }
 }
 
 function updateCamera(delta) {
@@ -453,12 +527,8 @@ function updateBullets(delta) {
     }
     for (let j = bots.length - 1; j >= 0; j -= 1) {
       const bot = bots[j];
-      if (
-        bullet.x > bot.x &&
-        bullet.x < bot.x + bot.width &&
-        bullet.y > bot.y &&
-        bullet.y < bot.y + bot.height
-      ) {
+      const distance = Math.hypot(bullet.x - bot.x, bullet.y - bot.y);
+      if (distance <= bot.hitRadius) {
         bot.health -= 20;
         bullets.splice(i, 1);
         for (let k = 0; k < 6; k += 1) {
@@ -515,28 +585,60 @@ function updateParticles(delta) {
 
 function drawBackground() {
   ctx.save();
-  ctx.fillStyle = '#0c0617';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (spaceBackdrop) {
+    ctx.fillStyle = '#050414';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const gridSpacing = 96;
-  const offsetX = -(camera.x % gridSpacing);
-  const offsetY = -(camera.y % gridSpacing);
+    if (!spaceBackdrop.pattern) {
+      spaceBackdrop.pattern = ctx.createPattern(spaceBackdrop.tile, 'repeat');
+    }
 
-  ctx.strokeStyle = 'rgba(255, 60, 172, 0.12)';
-  ctx.lineWidth = 1;
-  for (let x = offsetX; x < canvas.width; x += gridSpacing) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
-    ctx.stroke();
+    const tileWidth = spaceBackdrop.tile.width;
+    const tileHeight = spaceBackdrop.tile.height;
+    const parallax = 0.35;
+    const offsetX = -((camera.x * parallax) % tileWidth);
+    const offsetY = -((camera.y * parallax) % tileHeight);
+
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.fillStyle = spaceBackdrop.pattern;
+    ctx.fillRect(-tileWidth, -tileHeight, canvas.width + tileWidth * 2, canvas.height + tileHeight * 2);
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.translate(-camera.x * 0.12, -camera.y * 0.12);
+    ctx.drawImage(spaceBackdrop.nebula, 0, 0);
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.translate(-camera.x * 0.05, -camera.y * 0.05);
+    ctx.drawImage(spaceBackdrop.farStars, 0, 0);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#0c0617';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const gridSpacing = 96;
+    const offsetX = -(camera.x % gridSpacing);
+    const offsetY = -(camera.y % gridSpacing);
+
+    ctx.strokeStyle = 'rgba(255, 60, 172, 0.12)';
+    ctx.lineWidth = 1;
+    for (let x = offsetX; x < canvas.width; x += gridSpacing) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+    for (let y = offsetY; y < canvas.height; y += gridSpacing) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
   }
-  for (let y = offsetY; y < canvas.height; y += gridSpacing) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-    ctx.stroke();
-  }
-
   ctx.restore();
 }
 
@@ -578,26 +680,17 @@ function drawPlayer() {
   const mouseWorld = getMouseWorldPosition();
   const angle = Math.atan2(mouseWorld.y - player.y, mouseWorld.x - player.x);
 
-  ctx.save();
-  ctx.translate(player.x, player.y);
-  ctx.rotate(angle);
-
-  ctx.fillStyle = '#0b0411';
-  ctx.fillRect(-20, -16, 40, 32);
-
-  ctx.fillStyle = player.color;
-  ctx.fillRect(-16, -12, 32, 24);
-
-  ctx.fillStyle = '#ff3cac';
-  ctx.fillRect(8, -6, 20, 12);
-
-  ctx.fillStyle = '#f5ff5c';
-  ctx.fillRect(-12, -8, 8, 6);
-  ctx.fillRect(-12, 2, 8, 6);
-
-  ctx.restore();
-
-  drawHealthBar(player.x, player.y + 30, player.health, player.maxHealth);
+  if (player.sprite) {
+    drawShipSprite(player.sprite, player.x, player.y, angle, {
+      thrusterIntensity: player.thrusterWarmth,
+      glowColor: player.color,
+      showMuzzle: shooting && state.active,
+    });
+    drawHealthBar(player.x, player.y + player.sprite.hitRadius + 20, player.health, player.maxHealth);
+  } else {
+    drawFallbackPlayer(angle);
+    drawHealthBar(player.x, player.y + 30, player.health, player.maxHealth);
+  }
 }
 
 function drawBots() {
@@ -617,17 +710,423 @@ function drawHealthBar(x, y, value, maxValue) {
   ctx.restore();
 }
 
-function drawBotSprite(x, y, tint) {
+function drawFallbackPlayer(angle) {
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(angle);
+
+  ctx.fillStyle = '#0b0411';
+  ctx.fillRect(-20, -16, 40, 32);
+
+  ctx.fillStyle = player.color;
+  ctx.fillRect(-16, -12, 32, 24);
+
+  ctx.fillStyle = '#ff3cac';
+  ctx.fillRect(8, -6, 20, 12);
+
+  ctx.fillStyle = '#f5ff5c';
+  ctx.fillRect(-12, -8, 8, 6);
+  ctx.fillRect(-12, 2, 8, 6);
+
+  ctx.restore();
+}
+
+function drawFallbackBotSprite(bot, angle) {
+  ctx.save();
+  ctx.translate(bot.x, bot.y);
+  ctx.rotate(angle);
+
+  ctx.fillStyle = '#101221';
+  ctx.fillRect(-bot.width / 2, -bot.height / 2, bot.width, bot.height);
+
+  ctx.fillStyle = bot.tint;
+  ctx.fillRect(-bot.width / 2 + 6, -bot.height / 2 + 8, bot.width - 12, bot.height * 0.45);
+  ctx.fillRect(-bot.width / 2 + 8, -bot.height / 2 + bot.height * 0.4, bot.width - 16, bot.height * 0.35);
+
+  ctx.fillStyle = '#ffde59';
+  ctx.fillRect(bot.width / 2 - 14, -bot.height / 2 + 6, 10, 10);
+  ctx.restore();
+}
+
+function drawShipSprite(asset, x, y, angle, { thrusterIntensity = 0, glowColor = '#3cfbff', showMuzzle = false } = {}) {
   ctx.save();
   ctx.translate(x, y);
-  ctx.fillStyle = '#101221';
-  ctx.fillRect(0, 0, 44, 44);
-  ctx.fillStyle = tint;
-  ctx.fillRect(8, 8, 28, 12);
-  ctx.fillRect(10, 22, 24, 14);
-  ctx.fillStyle = '#ffde59';
-  ctx.fillRect(30, 4, 10, 8);
+  ctx.rotate(angle + asset.rotationOffset);
+
+  if (thrusterIntensity > 0 && asset.thrusterAnchor) {
+    const { offsetX, offsetY, length, width } = asset.thrusterAnchor;
+    const intensity = Math.min(1, Math.max(0, thrusterIntensity));
+    const flameLength = length * (0.6 + Math.random() * 0.4) * intensity;
+    const gradient = ctx.createLinearGradient(offsetX, offsetY, offsetX - flameLength, offsetY);
+    gradient.addColorStop(0, `rgba(245, 255, 92, ${0.55 * intensity})`);
+    gradient.addColorStop(0.5, `rgba(255, 95, 0, ${0.45 * intensity})`);
+    gradient.addColorStop(1, 'rgba(12, 6, 23, 0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.moveTo(offsetX, offsetY - width / 2);
+    ctx.lineTo(offsetX, offsetY + width / 2);
+    ctx.lineTo(offsetX - flameLength, offsetY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  if (asset.glowRadius) {
+    const glow = ctx.createRadialGradient(0, 0, asset.glowRadius * 0.4, 0, 0, asset.glowRadius);
+    glow.addColorStop(0, `${hexToRgba(glowColor, 0.2)}`);
+    glow.addColorStop(1, 'rgba(60, 251, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, asset.glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.drawImage(asset.canvas, -asset.anchorX, -asset.anchorY);
+
+  if (asset.muzzle && showMuzzle) {
+    const { offsetX, offsetY, length, width } = asset.muzzle;
+    const spark = Math.random() * 0.35;
+    ctx.fillStyle = `rgba(245, 255, 92, ${0.45 + spark})`;
+    ctx.fillRect(offsetX, offsetY - width / 2, length, width);
+  }
+
   ctx.restore();
+}
+
+function buildSpriteAssets() {
+  try {
+    const playerMaskData = [
+      0, 0, 0, 1, 2, 2,
+      0, 0, 1, 1, 2, 2,
+      0, 1, 1, 2, 2, 2,
+      0, 1, 1, 2, 2, 2,
+      0, 1, 2, 2, 2, 2,
+      1, 1, 2, 2, 2, 2,
+      1, 1, 2, 2, 2, 2,
+      1, 1, 2, 2, 2, 2,
+      1, 1, 1, 2, 2, 2,
+      0, 1, 1, 2, 2, 2,
+      0, 0, 1, 2, 2, 2,
+      0, 0, 1, 1, 2, 2,
+      0, 0, 0, 1, 2, 2,
+      0, 0, 0, 1, 2, 2,
+    ];
+
+    const botMaskData = [
+      0, 0, 1, 2, 2,
+      0, 1, 1, 2, 2,
+      0, 1, 2, 2, 2,
+      1, 1, 2, 2, 2,
+      1, 1, 2, 2, 2,
+      1, 1, 2, 2, 2,
+      1, 1, 2, 2, 2,
+      0, 1, 2, 2, 2,
+      0, 1, 1, 2, 2,
+      0, 0, 1, 2, 2,
+      0, 0, 1, 2, 2,
+    ];
+
+    const playerMask = new Mask(playerMaskData, 6, 14, true, false);
+    const botMask = new Mask(botMaskData, 5, 11, true, false);
+
+    const playerPalette = {
+      primary: '#3cfbff',
+      secondary: '#8cfff4',
+      outline: '#071322',
+      highlight: '#f5ff5c',
+      cockpit: '#0d0a28',
+    };
+
+    const botPaletteBase = {
+      outline: '#0c0d1a',
+      secondary: '#ffd2f7',
+      highlight: '#ffe8a7',
+      cockpit: '#140d2c',
+    };
+
+    const playerAsset = createShipAsset(playerMask, {
+      scale: 4,
+      palette: playerPalette,
+      detail: { stripes: true, fins: true },
+      muzzle: { offsetX: null, offsetY: 0, length: 3.2, width: 1.2 },
+      thruster: { offsetX: null, offsetY: 0, length: 5.2, width: 2.6 },
+    });
+
+    const botFactory = (tint) => {
+      const palette = {
+        primary: tint,
+        secondary: lightenColor(tint, 0.35),
+        outline: botPaletteBase.outline,
+        highlight: botPaletteBase.highlight,
+        cockpit: botPaletteBase.cockpit,
+      };
+      return createShipAsset(botMask, {
+        scale: 3,
+        palette,
+        detail: { stripes: false, fins: false },
+        muzzle: { offsetX: null, offsetY: 0, length: 2.4, width: 1 },
+        thruster: { offsetX: null, offsetY: 0, length: 4, width: 2 },
+      });
+    };
+
+    const background = createSpaceBackdrop();
+
+    return { player: playerAsset, botFactory, background };
+  } catch (error) {
+    console.warn('Failed to build sprite assets', error);
+    return null;
+  }
+}
+
+function createShipAsset(mask, { scale = 4, palette, detail = {}, muzzle = {}, thruster = {} } = {}) {
+  const sprite = new Sprite(mask, false);
+  const baseCanvas = document.createElement('canvas');
+  baseCanvas.width = sprite.canvas.width;
+  baseCanvas.height = sprite.canvas.height;
+  const baseCtx = baseCanvas.getContext('2d');
+  baseCtx.drawImage(sprite.canvas, 0, 0);
+
+  const scaledCanvas = document.createElement('canvas');
+  scaledCanvas.width = baseCanvas.width * scale;
+  scaledCanvas.height = baseCanvas.height * scale;
+  const scaledCtx = scaledCanvas.getContext('2d');
+  scaledCtx.imageSmoothingEnabled = false;
+  scaledCtx.drawImage(baseCanvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+
+  applySpritePalette(scaledCtx, scaledCanvas.width, scaledCanvas.height, palette);
+  addShipDetails(scaledCtx, scaledCanvas.width, scaledCanvas.height, scale, palette, detail);
+
+  const rotatedCanvas = rotateCanvas(scaledCanvas, Math.PI / 2);
+  const anchorX = rotatedCanvas.width / 2;
+  const anchorY = rotatedCanvas.height / 2;
+
+  const asset = {
+    canvas: rotatedCanvas,
+    width: rotatedCanvas.width,
+    height: rotatedCanvas.height,
+    anchorX,
+    anchorY,
+    rotationOffset: 0,
+    glowRadius: Math.max(rotatedCanvas.width, rotatedCanvas.height) * 0.45,
+  };
+
+  const muzzleStartX = muzzle.offsetX != null ? muzzle.offsetX * scale : rotatedCanvas.width - scale * 1.2;
+  const muzzleStartY = muzzle.offsetY != null ? anchorY + muzzle.offsetY * scale : anchorY;
+  asset.muzzle = {
+    offsetX: muzzleStartX - anchorX,
+    offsetY: muzzleStartY - anchorY,
+    length: (muzzle.length ?? 3) * scale,
+    width: (muzzle.width ?? 1.1) * scale,
+  };
+  asset.muzzleLength = asset.muzzle.offsetX + asset.muzzle.length;
+
+  const thrusterStartX = thruster.offsetX != null ? thruster.offsetX * scale : scale * 1.6;
+  const thrusterStartY = thruster.offsetY != null ? anchorY + thruster.offsetY * scale : anchorY;
+  asset.thrusterAnchor = {
+    offsetX: thrusterStartX - anchorX,
+    offsetY: thrusterStartY - anchorY,
+    length: (thruster.length ?? 5) * scale,
+    width: Math.max(scale * 1.5, (thruster.width ?? 2.4) * scale),
+  };
+
+  asset.hitRadius = Math.max(rotatedCanvas.width, rotatedCanvas.height) / 2 - scale;
+
+  return asset;
+}
+
+function applySpritePalette(ctx, width, height, palette) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const primary = hexToRgb(palette.primary);
+  const secondary = hexToRgb(palette.secondary ?? palette.primary);
+  const outline = hexToRgb(palette.outline ?? '#050810');
+  const highlight = hexToRgb(palette.highlight ?? palette.secondary ?? palette.primary);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * 4;
+      const alpha = data[idx + 3];
+      if (alpha === 0) continue;
+      const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+
+      if (brightness < 50) {
+        data[idx] = outline.r;
+        data[idx + 1] = outline.g;
+        data[idx + 2] = outline.b;
+        continue;
+      }
+
+      const vertical = y / height;
+      const accent = Math.max(0, 1 - Math.abs(vertical - 0.45) * 1.8);
+      const mix = Math.min(1, 0.25 + accent * 0.55);
+      const mixed = mixRgb(primary, secondary, mix);
+      const final = mixRgb(mixed, highlight, Math.pow(1 - vertical, 1.4) * 0.2);
+
+      data[idx] = Math.round(final.r);
+      data[idx + 1] = Math.round(final.g);
+      data[idx + 2] = Math.round(final.b);
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function addShipDetails(ctx, width, height, scale, palette, detail = {}) {
+  const midY = height / 2;
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = hexToRgba(palette.secondary ?? palette.primary, 0.28);
+  ctx.fillRect(width * 0.28, scale, scale * 1.2, height - scale * 2);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = hexToRgba(palette.highlight ?? palette.primary, 0.5);
+  ctx.fillRect(width - scale * 4, midY - scale * 1.6, scale * 2.4, scale * 3.2);
+  ctx.restore();
+
+  if (detail.stripes) {
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = hexToRgba(palette.primary, 0.45);
+    ctx.fillRect(width * 0.45, scale * 1.2, scale * 0.6, height - scale * 2.4);
+    ctx.fillRect(width * 0.55, scale * 1.6, scale * 0.6, height - scale * 3);
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = hexToRgba(palette.outline ?? '#050810', 0.45);
+  ctx.lineWidth = Math.max(1, scale * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(scale * 1.2, midY);
+  ctx.lineTo(width - scale * 1.2, midY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function rotateCanvas(sourceCanvas, radians) {
+  const rotated = document.createElement('canvas');
+  const sin = Math.abs(Math.sin(radians));
+  const cos = Math.abs(Math.cos(radians));
+  rotated.width = Math.ceil(sourceCanvas.width * cos + sourceCanvas.height * sin);
+  rotated.height = Math.ceil(sourceCanvas.width * sin + sourceCanvas.height * cos);
+  const rctx = rotated.getContext('2d');
+  rctx.imageSmoothingEnabled = false;
+  rctx.translate(rotated.width / 2, rotated.height / 2);
+  rctx.rotate(radians);
+  rctx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
+  return rotated;
+}
+
+function createSpaceBackdrop() {
+  const tileSize = 256;
+  const tile = document.createElement('canvas');
+  tile.width = tileSize;
+  tile.height = tileSize;
+  const tctx = tile.getContext('2d');
+  tctx.fillStyle = '#040314';
+  tctx.fillRect(0, 0, tileSize, tileSize);
+
+  for (let i = 0; i < 220; i += 1) {
+    const size = Math.random() < 0.82 ? 1 : 2;
+    const alpha = 0.25 + Math.random() * 0.55;
+    const r = 210 + Math.random() * 45;
+    const g = 210 + Math.random() * 35;
+    const b = 255;
+    tctx.fillStyle = `rgba(${r.toFixed(0)}, ${g.toFixed(0)}, ${b.toFixed(0)}, ${alpha.toFixed(2)})`;
+    const x = Math.random() * tileSize;
+    const y = Math.random() * tileSize;
+    tctx.fillRect(x, y, size, size);
+  }
+
+  for (let i = 0; i < 28; i += 1) {
+    const radius = 0.6 + Math.random() * 1.5;
+    const hue = 200 + Math.random() * 80;
+    const saturation = 70 + Math.random() * 20;
+    const lightness = 60 + Math.random() * 15;
+    tctx.fillStyle = `hsla(${hue.toFixed(0)}, ${saturation.toFixed(0)}%, ${lightness.toFixed(0)}%, 0.45)`;
+    tctx.beginPath();
+    tctx.arc(Math.random() * tileSize, Math.random() * tileSize, radius, 0, Math.PI * 2);
+    tctx.fill();
+  }
+
+  const farStars = document.createElement('canvas');
+  farStars.width = world.width + 400;
+  farStars.height = world.height + 400;
+  const fctx = farStars.getContext('2d');
+  for (let i = 0; i < 130; i += 1) {
+    const x = Math.random() * farStars.width;
+    const y = Math.random() * farStars.height;
+    const size = 1 + Math.random() * 2.5;
+    const gradient = fctx.createRadialGradient(x, y, 0, x, y, size * 4);
+    gradient.addColorStop(0, `rgba(245, 255, 210, ${0.4 + Math.random() * 0.3})`);
+    gradient.addColorStop(1, 'rgba(4, 3, 18, 0)');
+    fctx.fillStyle = gradient;
+    fctx.beginPath();
+    fctx.arc(x, y, size * 4, 0, Math.PI * 2);
+    fctx.fill();
+  }
+
+  const nebula = document.createElement('canvas');
+  nebula.width = world.width + 400;
+  nebula.height = world.height + 400;
+  const nctx = nebula.getContext('2d');
+  const nebulaCount = 4;
+  for (let i = 0; i < nebulaCount; i += 1) {
+    const nx = Math.random() * nebula.width;
+    const ny = Math.random() * nebula.height;
+    const radius = Math.max(world.width, world.height) * (0.22 + Math.random() * 0.18);
+    const hue = 200 + Math.random() * 60;
+    const gradient = nctx.createRadialGradient(nx, ny, 0, nx, ny, radius);
+    gradient.addColorStop(0, `hsla(${hue.toFixed(0)}, 85%, 55%, 0.32)`);
+    gradient.addColorStop(1, 'rgba(4, 3, 18, 0)');
+    nctx.fillStyle = gradient;
+    nctx.beginPath();
+    nctx.arc(nx, ny, radius, 0, Math.PI * 2);
+    nctx.fill();
+  }
+
+  return { tile, farStars, nebula, pattern: null };
+}
+
+function hexToRgb(hex) {
+  const normalized = hex.replace('#', '');
+  const bigint = parseInt(normalized.length === 3 ? normalized.repeat(2) : normalized, 16);
+  return {
+    r: (bigint >> 16) & 255,
+    g: (bigint >> 8) & 255,
+    b: bigint & 255,
+  };
+}
+
+function rgbToHex(r, g, b) {
+  return `#${[r, g, b]
+    .map((channel) => {
+      const clamped = Math.max(0, Math.min(255, Math.round(channel)));
+      return clamped.toString(16).padStart(2, '0');
+    })
+    .join('')}`;
+}
+
+function lightenColor(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  return rgbToHex(
+    r + (255 - r) * amount,
+    g + (255 - g) * amount,
+    b + (255 - b) * amount
+  );
+}
+
+function mixRgb(a, b, t) {
+  return {
+    r: a.r + (b.r - a.r) * t,
+    g: a.g + (b.g - a.g) * t,
+    b: a.b + (b.b - a.b) * t,
+  };
+}
+
+function hexToRgba(hex, alpha) {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function drawParticles() {
@@ -735,7 +1234,7 @@ function drawMiniMap() {
 
   bots.forEach((bot) => {
     ctx.fillStyle = bot.tint;
-    ctx.fillRect(offsetX + (bot.x + bot.width / 2) * scale - 3, offsetY + (bot.y + bot.height / 2) * scale - 3, 6, 6);
+    ctx.fillRect(offsetX + bot.x * scale - 3, offsetY + bot.y * scale - 3, 6, 6);
   });
 
   ctx.fillStyle = '#3cfbff';
@@ -785,7 +1284,6 @@ function update(delta, timestamp) {
   updateCashOut(timestamp);
   if (state.active) {
     handleMovement(delta, timestamp);
-    handleMouseStride(delta, timestamp);
     if (shooting) {
       shoot();
     }
@@ -795,6 +1293,11 @@ function update(delta, timestamp) {
     updateParticles(delta);
     checkWinState();
   } else {
+    player.vx *= 0.9;
+    player.vy *= 0.9;
+    if (player.sprite) {
+      player.thrusterWarmth += (0 - player.thrusterWarmth) * Math.min(delta * 0.2, 1);
+    }
     updateParticles(delta);
   }
   updateCamera(delta);
