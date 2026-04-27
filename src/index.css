@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply m-0 bg-white text-brandBlack antialiased;
+  font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+.section-shell {
+  @apply mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8;
+}
+
+.section-title {
+  @apply text-3xl font-bold tracking-tight text-brandBlack sm:text-4xl;
+}
+
+.section-subtitle {
+  @apply mt-3 max-w-3xl text-base text-gray-600 sm:text-lg;
+}
+
+.primary-btn {
+  @apply inline-flex items-center justify-center rounded-md bg-brandRed px-6 py-3 text-sm font-semibold text-white transition hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-brandRed focus:ring-offset-2;
+}
+
+.secondary-btn {
+  @apply inline-flex items-center justify-center rounded-md border border-brandBlack px-6 py-3 text-sm font-semibold text-brandBlack transition hover:bg-brandBlack hover:text-white focus:outline-none focus:ring-2 focus:ring-brandBlack focus:ring-offset-2;
+}
